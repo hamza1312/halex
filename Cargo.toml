@@ -1,9 +1,10 @@
 [package]
 name = "halex"
+description="a mid level, simple, expressive and strongly typed programming language."
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-chumsky = "0.9.3"
+miette = {version = "5.10.0", features = ["fancy"]}
+logos = "0.13.0"
+clap = { version = "4.4.12", features = ["derive"] }

@@ -1,2 +1,2 @@
 # halex
-a low level, simple, expressive and strongly typed programming language.
+a mid level, simple, expressive and strongly typed programming language.
