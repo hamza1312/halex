@@ -1,10 +1,6 @@
+let var: i64 = 5
 
-1 == 2
-
-500 >= 5
-
-6 != 2
-
-
-2 + 2
-
+fn x(a: str, b: str) -> str {
+	return a + b * var
+}
+print(x())

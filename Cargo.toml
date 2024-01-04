@@ -8,3 +8,7 @@ edition = "2021"
 miette = {version = "5.10.0", features = ["fancy"]}
 logos = "0.13.0"
 clap = { version = "4.4.12", features = ["derive"] }
+cranelift = "0.103.0"
+cranelift-object = "0.103.0"
+cranelift-module = "0.103.0"
+cranelift-native = "0.103.0"

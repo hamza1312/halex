@@ -5,7 +5,7 @@ use logos::{Lexer, Logos};
 use crate::parser::BinOp;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Logos)]
-#[logos(skip r"[ \r\f]+")]
+#[logos(skip r"[ \t\r\f]+")]
 #[logos(skip r"#.*")]
 pub enum LogosToken {
     #[regex(r#"\d+"#, priority = 2)]
@@ -16,7 +16,6 @@ pub enum LogosToken {
     Ident,
     #[regex(r#""([^"\\]|\\[\s\S])*""#)]
     String,
-
     #[token("+")]
     Plus,
     #[token("-")]
@@ -41,12 +40,16 @@ pub enum LogosToken {
     Colon,
     #[token(".")]
     Dot,
+    #[token(",")]
+    Comma,
     #[token(";")]
     Semicolon,
     #[token("->")]
     Arrow,
     #[token("fn")]
     KwFn,
+    #[token("return")]
+    KwReturn,
     #[token("let")]
     KwLet,
     #[token("\n")]
