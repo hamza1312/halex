@@ -1,191 +1,265 @@
 pub mod mir;
-use self::mir::{BinOp, Literal, Mir};
-use crate::HalexArgs;
-use cranelift::prelude::{settings::Flags, *};
+mod types;
 
-use codegen::ir::FuncRef;
-use cranelift_module::{DataDescription, FuncId, Linkage, Module};
-use cranelift_object::{ObjectBuilder, ObjectModule, ObjectProduct};
-use std::{collections::HashMap, io::Write, process::Command};
+use std::{collections::HashMap, path::Path};
 
-pub struct Compiler {
-    builder_context: FunctionBuilderContext,
-    ctx: codegen::Context,
-    data: DataDescription,
-    module: ObjectModule,
-    ir: Vec<Mir>,
+use inkwell::{
+    builder::Builder,
+    context::Context,
+    module::{Linkage, Module},
+    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine},
+    types::{BasicType, BasicTypeEnum},
+    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue},
+    AddressSpace, OptimizationLevel,
+};
+
+use crate::args::HalexArgs;
+
+use self::{
+    mir::{Literal, Mir, Type},
+    types::{Value, Variable},
+};
+
+pub struct Compiler<'a> {
+    pub(crate) ir: Vec<Mir>,
+    pub(crate) target_machine: TargetMachine,
+    pub(crate) module: Module<'a>,
+    pub(crate) builder: Builder<'a>,
+    pub(crate) context: &'a Context,
+    pub(crate) args: &'a HalexArgs,
+    pub(crate) fn_map: HashMap<String, FunctionValue<'a>>,
+    pub(crate) main_fn: FunctionValue<'a>,
+    pub(crate) variables: Vec<Variable<'a>>,
 }
-impl Compiler {
-    pub fn compile_all(ir: Vec<Mir>, args: &HalexArgs) {
-        let mut flag_builder = settings::builder();
-        flag_builder.set("use_colocated_libcalls", "false").unwrap();
-        flag_builder.set("is_pic", "false").unwrap();
-        let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
-        });
-        let isa = isa_builder
-            .finish(settings::Flags::new(flag_builder))
+
+impl<'a> Compiler<'a> {
+    pub fn new(ir: Vec<Mir>, context: &'a Context, args: &'a HalexArgs) -> Self {
+        let module = context.create_module(args.path.to_str().unwrap_or("halex"));
+        let builder = context.create_builder();
+        Target::initialize_native(&InitializationConfig::default()).unwrap();
+        let optimization = match args.opt {
+            0 => OptimizationLevel::None,
+            1 => OptimizationLevel::Less,
+            2 => OptimizationLevel::Default,
+            3 => OptimizationLevel::Aggressive,
+            _ => {
+                eprintln!("Invalidoptimization level");
+                std::process::exit(1);
+            }
+        };
+        let target_triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&target_triple).unwrap();
+        let target_machine = target
+            .create_target_machine(
+                &target_triple,
+                "generic",
+                "",
+                optimization,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
             .unwrap();
-        let builder = ObjectBuilder::new(isa, "main", cranelift_module::default_libcall_names())
-            .expect("Couldn't make the builder");
-        let module = ObjectModule::new(builder);
-        let mut compiler = Self {
-            builder_context: FunctionBuilderContext::new(),
-            ctx: module.make_context(),
-            data: DataDescription::new(),
+        let main_fn_ty = context.i32_type().fn_type(&[], false);
+        let main_fn = module.add_function("main", main_fn_ty, None);
+        let entry = context.append_basic_block(main_fn, "entry");
+
+        builder.position_at_end(entry);
+        Self {
+            builder,
+            target_machine,
+            variables: Vec::new(),
+            args,
+            fn_map: HashMap::new(),
+            main_fn,
+            context,
             module,
             ir,
-        };
-        compiler.compile();
-
-        // Now convert it to an object file
-        let product = compiler.module.finish();
-        let raw_data = product.emit().unwrap();
-        // Write it to the <object> file
-        let mut f = std::fs::File::create(args.object.clone()).unwrap();
-        f.write_all(&raw_data).unwrap();
-        Command::new("gcc")
-            .arg(args.object.to_string())
-            .arg("-o")
-            .arg(args.object.replace(".o", ""))
-            .spawn()
-            .expect("Failed to execute gcc, made an object file instead");
-    }
-    fn translate(&mut self) {
-        let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
-        let entry_block = builder.create_block();
-
-        builder.append_block_params_for_function_params(entry_block);
-        builder.switch_to_block(entry_block);
-        builder.seal_block(entry_block);
-        let mut handler = Handler {
-            module: &mut self.module,
-            builder,
-            functions: HashMap::new(),
-            data: DataDescription::new(),
-        };
-        for expr in self.ir.iter() {
-            handler.translate_expr(expr);
-        }
-        let zero = handler.builder.ins().iconst(types::I64, 0);
-        handler.builder.ins().return_(&[zero]);
-        handler.builder.finalize();
-    }
-    fn compile(&mut self) {
-        self.translate();
-        self.ctx
-            .func
-            .signature
-            .returns
-            .push(AbiParam::new(types::I64));
-        let id = self
-            .module
-            .declare_function("main", Linkage::Export, &self.ctx.func.signature)
-            .unwrap();
-        self.module.define_function(id, &mut self.ctx).unwrap();
-
-        self.data.clear();
-
-        let mut s = String::new();
-
-        s.clear();
-
-        codegen::write_function(&mut s, &self.ctx.func).unwrap();
-        println!("CLIF:\n{}", s);
-        if let Err(e) = codegen::verify_function(
-            &self.ctx.func,
-            &Flags::new(cranelift::codegen::settings::builder()),
-        ) {
-            println!("codegen error");
-
-            let mut s = String::new();
-
-            s.clear();
-
-            codegen::write_function(&mut s, &self.ctx.func).unwrap();
-            println!("CLIF:\n{}", s);
-
-            panic!("errors: {:#?}", e);
         }
     }
-}
-
-struct Handler<'a> {
-    builder: FunctionBuilder<'a>,
-    data: DataDescription,
-    module: &'a mut ObjectModule,
-    functions: HashMap<&'a str, FuncRef>,
-}
-impl<'a> Handler<'a> {
-    fn translate_literal(&mut self, literal: &'a Literal) -> Value {
+    fn compile_literal<'f>(&mut self, literal: &'f Literal) -> Value<'a> {
         match literal {
-            Literal::Int(n) => self.builder.ins().iconst(types::I64, *n),
-            Literal::Float(n) => self.builder.ins().f64const(*n),
-            Literal::Str(string) => {
-                let mut s = string.clone();
-                s.push('\0');
-                let boxed_s = s.clone().into_bytes().into_boxed_slice();
-                let id = self.module.declare_anonymous_data(false, false).unwrap();
+            Literal::Int(i) => Value::Int(self.context.i64_type().const_int(*i as u64, false)),
+            Literal::Float(f) => Value::Float(self.context.f64_type().const_float(*f)),
 
-                self.data.define(boxed_s);
-                self.module.define_data(id, &self.data).unwrap();
-                self.data.clear();
-
-                let value = self.module.declare_data_in_func(id, &mut self.builder.func);
-                // Return the pointer
-                self.builder.ins().global_value(types::I64, value)
-            }
-            Literal::Unit => self.builder.ins().iconst(types::I64, 0),
-
-            _ => todo!(),
+            Literal::Str(s) => Value::Pointer(
+                self.builder
+                    .build_global_string_ptr(&s, &s)
+                    .unwrap()
+                    .as_pointer_value(),
+            ),
+            Literal::Bool(b) => Value::Bool(self.context.bool_type().const_int(*b as u64, false)),
+            Literal::Unit => Value::None(
+                self.context
+                    .i8_type()
+                    .ptr_type(AddressSpace::default())
+                    .const_null(),
+            ),
         }
     }
-    fn translate_expr(&mut self, expr: &'a Mir) -> Value {
+    fn compile_expr<'f>(&mut self, expr: &'f Mir) -> Value<'a> {
         match expr {
-            Mir::Lit(lit) => self.translate_literal(lit),
-            Mir::Call(name, argss) => {
-                let mut args = Vec::new();
-                for a in argss {
-                    args.push(self.translate_expr(a));
+            Mir::Lit(lit) => self.compile_literal(lit),
+            Mir::Call(name, args) => {
+                let f = *self.fn_map.get(name).expect("Function not found");
+                let mut arguments = Vec::new();
+                for arg in args {
+                    arguments.push(BasicMetadataValueEnum::from(
+                        self.compile_expr(arg).as_basic_value(),
+                    ));
                 }
-                let f = self.functions.get(name.as_str()).unwrap();
-                let call = self.builder.ins().call(*f, args.as_slice());
-                println!("{:?}", call);
-                self.translate_literal(&Literal::Unit)
+                let return_value = self
+                    .builder
+                    .build_call(f, arguments.as_slice(), "call")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left();
+                match return_value {
+                    Some(x) => match x {
+                        BasicValueEnum::IntValue(i) => Value::Int(i),
+                        BasicValueEnum::FloatValue(f) => Value::Float(f),
+                        BasicValueEnum::PointerValue(p) => Value::Pointer(p),
+                        _ => unimplemented!(),
+                    },
+                    None => self.null(),
+                }
+            }
+            Mir::Let(index, ty, value) => {
+                let ty = self.get_type(ty);
+                let alloca = self.builder.build_alloca(ty, &index.to_string()).unwrap();
+                let value = self.compile_expr(value);
+                self.builder
+                    .build_store(alloca, value.as_basic_value())
+                    .unwrap();
+                self.variables.insert(
+                    *index,
+                    Variable {
+                        ptr: alloca,
+                        var_type: ty,
+                    },
+                );
+                self.null()
+            }
+            Mir::GetVar(index) => {
+                let var = self.variables.get(*index).unwrap();
+                Value::from(
+                    self.builder
+                        .build_load(var.var_type, var.ptr, &index.to_string())
+                        .unwrap(),
+                )
             }
             Mir::ExternFunction {
                 name,
                 params,
                 return_type,
+                is_varadic,
             } => {
-                let mut sig = self.module.make_signature();
+                let mut param_types = Vec::new();
                 for p in params {
-                    sig.params.push(AbiParam::new(self.convert_type(&p)))
+                    param_types.push(self.get_type(&p).into())
                 }
-                if return_type != &mir::Type::Unit {
-                    sig.returns
-                        .push(AbiParam::new(self.convert_type(&return_type)));
-                }
-                let callee = self
+
+                let fn_type = self
+                    .get_type(return_type)
+                    .fn_type(param_types.as_slice(), *is_varadic);
+                let function = self
                     .module
-                    .declare_function(&name, Linkage::Import, &sig)
+                    .add_function(&name, fn_type, Some(Linkage::External));
+                self.fn_map.insert(name.into(), function);
+                self.null()
+            }
+            Mir::Ref(x) => {
+                let value = self.compile_expr(x.as_ref());
+                let ptr = self
+                    .builder
+                    .build_alloca(value.as_basic_value().get_type(), "")
+                    .expect("Couldn't make pointer");
+                self.builder
+                    .build_store(ptr, value.as_basic_value())
                     .unwrap();
-                let local_callee = self.module.declare_func_in_func(callee, self.builder.func);
-                self.functions.insert(&name, local_callee);
-                self.translate_literal(&Literal::Unit)
+
+                Value::Pointer(ptr)
+            }
+            Mir::Deref(v) => {
+                let ptr = self.compile_expr(v.as_ref()).as_ptr();
+                Value::from(
+                    self.builder
+                        .build_load(ptr.get_type(), ptr, "deref")
+                        .unwrap(),
+                )
             }
             _ => todo!(),
         }
     }
 
-    fn convert_type(&self, ty: &mir::Type) -> Type {
-        use mir::Type::*;
+    fn get_type<'f>(&self, ty: &'f Type) -> BasicTypeEnum<'a> {
+        use Type::*;
         match ty {
-            I64 | Str => types::I64,
-            Unit => types::I64,
-            I32 => types::I32,
-            F64 => types::F64,
-            F32 => types::F32,
+            I64 => self.context.i64_type().into(),
+            I32 => self.context.i32_type().into(),
+            F64 => self.context.f64_type().into(),
+            F32 => self.context.f32_type().into(),
+            Pointer(t) => {
+                let t = self.get_type(t.as_ref());
+                match t {
+                    BasicTypeEnum::IntType(int_ty) => int_ty
+                        .ptr_type(AddressSpace::default())
+                        .as_basic_type_enum(),
+                    BasicTypeEnum::FloatType(float_ty) => float_ty
+                        .ptr_type(AddressSpace::default())
+                        .as_basic_type_enum(),
+                    BasicTypeEnum::PointerType(elem_ty) => elem_ty
+                        .ptr_type(AddressSpace::default())
+                        .as_basic_type_enum(),
+                    BasicTypeEnum::ArrayType(e) => {
+                        e.ptr_type(AddressSpace::default()).as_basic_type_enum()
+                    }
+                    BasicTypeEnum::StructType(x) => {
+                        x.ptr_type(AddressSpace::default()).as_basic_type_enum()
+                    }
+                    _ => unimplemented!(),
+                }
+            }
+            Unit => self
+                .context
+                .i8_type()
+                .ptr_type(AddressSpace::default())
+                .into(),
+            Str => self
+                .context
+                .i8_type()
+                .ptr_type(AddressSpace::default())
+                .into(),
+            _ => todo!(),
         }
+    }
+    fn null(&self) -> Value<'a> {
+        Value::None(
+            self.context
+                .i8_type()
+                .ptr_type(AddressSpace::default())
+                .const_null(),
+        )
+    }
+
+    pub fn compile(&mut self) {
+        for x in self.ir.clone() {
+            println!("{:?}", self.compile_expr(&x));
+        }
+    }
+    pub fn finish(&mut self) {
+        self.builder
+            .position_at_end(self.main_fn.get_last_basic_block().unwrap());
+        self.builder
+            .build_return(Some(&self.context.i32_type().const_int(0, false)))
+            .unwrap();
+        println!("{}", self.module.print_to_string().to_string());
+        self.module.verify().unwrap();
+        self.target_machine
+            .write_to_file(
+                &self.module,
+                FileType::Object,
+                &Path::new(&self.args.object),
+            )
+            .expect("Error while making the object file.");
     }
 }

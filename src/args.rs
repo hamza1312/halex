@@ -8,6 +8,9 @@ pub struct HalexArgs {
     #[arg(short, long, default_value = "main.hlx")]
     pub path: std::path::PathBuf,
     /// Object name
-    #[arg(short, long, default_value = "a")]
+    #[arg(short, long, default_value = "main.o")]
     pub object: String,
+    /// Opt level
+    #[arg(long, default_value = "3")]
+    pub opt: usize,
 }

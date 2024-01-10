@@ -21,15 +21,31 @@ pub enum BinOp {
 }
 
 #[derive(Debug, Clone)]
+pub enum Type {
+    I64,
+    F64,
+    I32,
+    F32,
+    Bool,
+    Str,
+    Pointer(Box<Type>),
+}
+
+#[derive(Debug, Clone)]
 pub enum ExprKind {
     Int(i64),
     Float(f64),
     Ident(String),
+    Bool(bool),
     String(String),
     Call(String, Vec<Expr>),
     Return(Box<Expr>),
     Function(String, Vec<(String, String)>, Option<String>, Vec<Expr>),
+    ExternFunction(String, Vec<String>, Option<String>, bool),
     Let(String, String, Box<Expr>),
+    Ref(Box<Expr>),
+    Deref(Box<Expr>),
+    Type(Type),
     Infix(Box<Expr>, BinOp, Box<Expr>),
     Unit,
     Error,
@@ -195,8 +211,58 @@ impl<'a> Parser<'a> {
             KwLet => self.parse_let(),
             KwReturn => self.parse_return(),
             KwFn => self.parse_fn(),
+            KwExtern => self.parse_extern(),
             _ => self.expr(0),
         }
+    }
+    fn parse_extern(&mut self) -> Expr {
+        let start = self.lexer.span().start;
+        self.next();
+        self.expect_next(LogosToken::KwFn, "Expected `fn` keyword after extern");
+        let name = self.current();
+        let name = self.text(&name);
+        self.expect_next(LogosToken::Ident, "Expected external function's name");
+        let mut params: Vec<String> = Vec::new();
+        let mut varadic: bool = false;
+        let mut return_type: Option<String> = None;
+        if self.current().kind == LogosToken::LParen {
+            self.next();
+            loop {
+                if self.current().kind == LogosToken::RParen {
+                    break;
+                }
+                if self.current().kind == LogosToken::Comma {
+                    self.next();
+                    continue;
+                }
+                let ty = self.current();
+                let ty = self.text(&ty);
+                if self.current().kind == LogosToken::Ellipsis {
+                    break;
+                }
+                self.expect_next(LogosToken::Ident, "Expected external function's parameter");
+                params.push(ty.to_string());
+            }
+            if self.current().kind == LogosToken::Ellipsis {
+                varadic = true;
+                self.next();
+            }
+            self.expect_next(
+                LogosToken::RParen,
+                "Expected ) end after function parameters",
+            )
+        }
+
+        if self.current().kind == LogosToken::Arrow {
+            self.next();
+            let c = self.current();
+            return_type = Some(self.text(&c).to_string());
+            self.expect_next(LogosToken::Ident, "Expected return type");
+        }
+        Expr::new(
+            start..self.lexer.span().end,
+            ExprKind::ExternFunction(name.to_string(), params, return_type, varadic),
+        )
     }
     fn parse_return(&mut self) -> Expr {
         let start = self.lexer.span().start;
@@ -308,7 +374,10 @@ impl<'a> Parser<'a> {
                 let int: i64 = self.text(&token).parse().unwrap();
                 Expr::new(span.start..self.lexer.span().end, ExprKind::Int(int))
             }
-
+            LogosToken::True => Expr::new(span.start..self.lexer.span().end, ExprKind::Bool(true)),
+            LogosToken::False => {
+                Expr::new(span.start..self.lexer.span().end, ExprKind::Bool(false))
+            }
             LogosToken::Float => {
                 let float: f64 = self.text(&token).parse().unwrap();
                 Expr::new(span.start..self.lexer.span().end, ExprKind::Float(float))
@@ -348,7 +417,23 @@ impl<'a> Parser<'a> {
 
                 return Expr::new(span.start..self.lexer.span().end, ExprKind::Ident(ident));
             }
+            LogosToken::BitAnd => {
+                self.next();
+                let expr = self.expr(0);
+                return Expr::new(
+                    span.start..self.lexer.span().end,
+                    ExprKind::Ref(expr.boxed()),
+                );
+            }
 
+            LogosToken::Times => {
+                self.next();
+                let expr = self.expr(0);
+                return Expr::new(
+                    span.start..self.lexer.span().end,
+                    ExprKind::Deref(expr.boxed()),
+                );
+            }
             LogosToken::LParen => {
                 self.next();
                 if self.current().kind != LogosToken::RParen {

@@ -1,6 +1,8 @@
-let var: i64 = 5
+extern fn printf(str, ...) -> i64
 
-fn x(a: str, b: str) -> str {
-	return a + b * var
-}
-print(x())
+let x: i64 = 5
+let f: *i64 = &9
+let n: option i64 = some 5
+printf("%d", match n 
+	| some x -> x + 1
+	| none => 0)

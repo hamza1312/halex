@@ -16,6 +16,12 @@ pub enum LogosToken {
     Ident,
     #[regex(r#""([^"\\]|\\[\s\S])*""#)]
     String,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
+    #[token("...")]
+    Ellipsis,
     #[token("+")]
     Plus,
     #[token("-")]
@@ -50,6 +56,8 @@ pub enum LogosToken {
     KwFn,
     #[token("return")]
     KwReturn,
+    #[token("extern")]
+    KwExtern,
     #[token("let")]
     KwLet,
     #[token("\n")]
