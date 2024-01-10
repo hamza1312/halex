@@ -77,6 +77,7 @@ pub enum Mir {
     },
     Call(String, Vec<Mir>),
     GetVar(Ident),
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq)]

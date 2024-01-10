@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::compiler::mir::*;
 
-use crate::parser::{BinOp as PBinOp, Expr, ExprKind};
+use crate::parser::{BinOp as PBinOp, Expr, ExprKind, Type as PType};
 
 pub fn lower_ast(ast: Vec<Expr>) -> Vec<Mir> {
     let mut handler = LowerHandler::new(ast);
@@ -25,14 +25,17 @@ impl LowerHandler {
             names: HashMap::new(),
         }
     }
-    fn convert_type(&self, ty: String) -> Type {
-        match ty.as_str() {
-            "i64" => Type::I64,
-            "i32" => Type::I32,
-            "f64" => Type::F64,
-            "f32" => Type::F32,
-            "str" => Type::Str,
-            _ => todo!("Other types later + User types"),
+    fn convert_type(&self, ty: PType) -> Type {
+        match ty {
+            PType::I64 => Type::I64,
+            PType::I32 => Type::I32,
+            PType::F64 => Type::F64,
+            PType::F32 => Type::F32,
+            PType::Str => Type::Str,
+            PType::Unit => Type::Unit,
+            PType::Pointer(x) => Type::Pointer(Box::new(self.convert_type(*x))),
+            PType::Invalid => unreachable!(),
+            _ => todo!(),
         }
     }
     fn lower_expr(&mut self, expr: Expr) -> Mir {
@@ -43,6 +46,7 @@ impl LowerHandler {
             ExprKind::Bool(b) => Mir::Lit(Literal::Bool(b)),
             ExprKind::Ref(x) => Mir::Ref(Box::new(self.lower_expr(*x))),
             ExprKind::Deref(x) => Mir::Deref(Box::new(self.lower_expr(*x))),
+            ExprKind::Unit => Mir::Unit,
             ExprKind::ExternFunction(name, params, return_type, varadic) => {
                 let mut types = Vec::new();
                 for p in params {
@@ -68,7 +72,6 @@ impl LowerHandler {
                     PBinOp::Sub => BinOp::Sub,
                     PBinOp::Mul => BinOp::Mul,
                     PBinOp::Div => BinOp::Div,
-                    PBinOp::Pow => BinOp::Pow,
                     PBinOp::Eq => BinOp::Eq,
                     PBinOp::Neq => BinOp::Neq,
                     PBinOp::Lt => BinOp::Lt,

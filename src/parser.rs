@@ -9,7 +9,6 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
-    Pow,
     Eq,
     Neq,
     Lt,
@@ -28,7 +27,9 @@ pub enum Type {
     F32,
     Bool,
     Str,
+    Unit,
     Pointer(Box<Type>),
+    Invalid,
 }
 
 #[derive(Debug, Clone)]
@@ -40,12 +41,16 @@ pub enum ExprKind {
     String(String),
     Call(String, Vec<Expr>),
     Return(Box<Expr>),
-    Function(String, Vec<(String, String)>, Option<String>, Vec<Expr>),
-    ExternFunction(String, Vec<String>, Option<String>, bool),
-    Let(String, String, Box<Expr>),
+    Function(String, Vec<(String, Type)>, Option<Type>, Vec<Expr>),
+    ExternFunction(String, Vec<Type>, Option<Type>, bool),
+    Assign {
+        var: String,
+        value: Box<Expr>,
+        deref: bool,
+    },
+    Let(String, Type, Box<Expr>),
     Ref(Box<Expr>),
     Deref(Box<Expr>),
-    Type(Type),
     Infix(Box<Expr>, BinOp, Box<Expr>),
     Unit,
     Error,
@@ -120,7 +125,6 @@ impl<'a> Parser<'a> {
             Gt | Lt | Ge | Le => (7, 8),
             Plus | Minus => (9, 10),
             Times | Slash => (11, 12),
-            Pow => (22, 21),
             _ => return None,
         })
     }
@@ -222,9 +226,9 @@ impl<'a> Parser<'a> {
         let name = self.current();
         let name = self.text(&name);
         self.expect_next(LogosToken::Ident, "Expected external function's name");
-        let mut params: Vec<String> = Vec::new();
+        let mut params: Vec<Type> = Vec::new();
         let mut varadic: bool = false;
-        let mut return_type: Option<String> = None;
+        let mut return_type: Option<Type> = None;
         if self.current().kind == LogosToken::LParen {
             self.next();
             loop {
@@ -235,13 +239,11 @@ impl<'a> Parser<'a> {
                     self.next();
                     continue;
                 }
-                let ty = self.current();
-                let ty = self.text(&ty);
                 if self.current().kind == LogosToken::Ellipsis {
                     break;
                 }
-                self.expect_next(LogosToken::Ident, "Expected external function's parameter");
-                params.push(ty.to_string());
+                let ty = self.parse_type();
+                params.push(ty);
             }
             if self.current().kind == LogosToken::Ellipsis {
                 varadic = true;
@@ -255,9 +257,8 @@ impl<'a> Parser<'a> {
 
         if self.current().kind == LogosToken::Arrow {
             self.next();
-            let c = self.current();
-            return_type = Some(self.text(&c).to_string());
-            self.expect_next(LogosToken::Ident, "Expected return type");
+            let ty = self.parse_type();
+            return_type = Some(ty)
         }
         Expr::new(
             start..self.lexer.span().end,
@@ -278,8 +279,8 @@ impl<'a> Parser<'a> {
         let name = self.text(&c);
 
         self.expect_next(LogosToken::Ident, "Expected function's name");
-        let mut params: Vec<(String, String)> = Vec::new();
-        let mut return_type: Option<String> = None;
+        let mut params: Vec<(String, Type)> = Vec::new();
+        let mut return_type: Option<Type> = None;
         if self.current().kind == LogosToken::LParen {
             self.next();
             loop {
@@ -294,9 +295,7 @@ impl<'a> Parser<'a> {
                 let name = self.text(&c);
                 self.expect_next(LogosToken::Ident, "Expected parameter name");
                 self.expect_next(LogosToken::Colon, "Expected colon");
-                let c = self.current();
-                let ty = self.text(&c);
-                self.expect_next(LogosToken::Ident, "Expected parameter type");
+                let ty = self.parse_type();
 
                 params.push((name.into(), ty.into()))
             }
@@ -305,9 +304,8 @@ impl<'a> Parser<'a> {
 
         if self.current().kind == LogosToken::Arrow {
             self.next();
-            let c = self.current();
-            return_type = Some(self.text(&c).to_string());
-            self.expect_next(LogosToken::Ident, "Expected return type")
+            let ty = self.parse_type();
+            return_type = Some(ty)
         }
         let block = self.block();
         Expr::new(
@@ -325,16 +323,13 @@ impl<'a> Parser<'a> {
         self.expect_next(LogosToken::Ident, "Expected variable name");
 
         self.expect_next(LogosToken::Colon, "Expected colon");
-        let c = self.current();
-        let ty = self.text(&c);
-        self.expect_next(LogosToken::Ident, "Expected variable's type");
-
+        let ty = self.parse_type();
         self.expect_next(LogosToken::Eq, "Expected =");
         let expr = self.expr(0);
 
         Expr::new(
             start..self.lexer.span().end,
-            ExprKind::Let(name.to_string(), ty.to_string(), expr.boxed()),
+            ExprKind::Let(name.to_string(), ty, expr.boxed()),
         )
     }
 
@@ -363,6 +358,47 @@ impl<'a> Parser<'a> {
             break;
         }
         lhs
+    }
+
+    fn parse_type(&mut self) -> Type {
+        let token = self.current();
+        let span = token.span.clone();
+        let kind = token.kind;
+        match kind {
+            LogosToken::Times => {
+                self.next();
+                let t = self.parse_type();
+                Type::Pointer(Box::new(t))
+            }
+            LogosToken::Ident => {
+                let text = self.text(&token);
+                println!("{:?}", text);
+                self.next();
+                match text {
+                    "i64" => Type::I64,
+                    "i32" => Type::F32,
+                    "f64" => Type::F64,
+                    "f32" => Type::F32,
+                    "bool" => Type::Bool,
+                    "str" => Type::Str,
+                    _ => {
+                        // We'll add user types later
+                        self.err("Invalid type", span);
+                        Type::Invalid
+                    }
+                }
+            }
+            LogosToken::LParen => {
+                self.next();
+                self.expect_next(LogosToken::RParen, "Expected )");
+                Type::Unit
+            }
+            _ => {
+                println!("{:?}", kind);
+                self.err("Invalid type", span);
+                Type::Invalid
+            }
+        }
     }
 
     fn term(&mut self) -> Expr {
@@ -394,14 +430,14 @@ impl<'a> Parser<'a> {
                 let ident = self.text(&token).to_string();
                 self.next();
                 if self.current().kind == LogosToken::LParen {
-                    self.lexer.next();
+                    self.next();
                     let mut exprs: Vec<Expr> = Vec::new();
                     loop {
                         if self.current().kind == LogosToken::RParen {
                             break;
                         }
                         if self.current().kind == LogosToken::Comma {
-                            self.lexer.next();
+                            self.next();
                             continue;
                         }
 
@@ -413,8 +449,18 @@ impl<'a> Parser<'a> {
                         span.start..self.lexer.span().end,
                         ExprKind::Call(ident, exprs),
                     );
+                } else if self.current().kind == LogosToken::Eq {
+                    self.next();
+                    let value = self.expr(0);
+                    return Expr::new(
+                        span.start..self.lexer.span().end,
+                        ExprKind::Assign {
+                            var: ident,
+                            value: value.boxed(),
+                            deref: false,
+                        },
+                    );
                 }
-
                 return Expr::new(span.start..self.lexer.span().end, ExprKind::Ident(ident));
             }
             LogosToken::BitAnd => {

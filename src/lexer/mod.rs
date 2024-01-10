@@ -30,8 +30,6 @@ pub enum LogosToken {
     Times,
     #[token("/")]
     Slash,
-    #[token("**")]
-    Pow,
     #[token("or")]
     Or,
     #[token("and")]
@@ -94,7 +92,6 @@ impl LogosToken {
             Self::Minus => BinOp::Sub,
             Self::Times => BinOp::Mul,
             Self::Slash => BinOp::Div,
-            Self::Pow => BinOp::Pow,
             Self::Eqq => BinOp::Eq,
             Self::Neq => BinOp::Neq,
             Self::Lt => BinOp::Lt,
@@ -195,12 +192,11 @@ mod tests {
     }
     #[test]
     fn operators() {
-        let mut tokens = LogosToken::lexer("+ - * / ** and or ^ & |");
+        let mut tokens = LogosToken::lexer("+ - * / ** and or & |");
         assert_eq!(tokens.next(), Some(Ok(LogosToken::Plus)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::Minus)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::Times)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::Slash)));
-        assert_eq!(tokens.next(), Some(Ok(LogosToken::Pow)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::And)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::Or)));
         assert_eq!(tokens.next(), Some(Ok(LogosToken::BitXor)));

@@ -99,6 +99,7 @@ impl<'a> Compiler<'a> {
     fn compile_expr<'f>(&mut self, expr: &'f Mir) -> Value<'a> {
         match expr {
             Mir::Lit(lit) => self.compile_literal(lit),
+            Mir::Unit => self.null(),
             Mir::Call(name, args) => {
                 let f = *self.fn_map.get(name).expect("Function not found");
                 let mut arguments = Vec::new();
